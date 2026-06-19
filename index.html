@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Giraffa Pixel Runner</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;touch-action:none;image-rendering:pixelated}
+body{background:#87CEEB;overflow:hidden;font-family:'Courier New',monospace}
+#game{position:relative;width:100vw;height:100vh}
+canvas{background:#87CEEB;display:block;width:100%;height:100%}
+#ui{position:absolute;top:10px;left:10px;color:#fff;font-size:20px;text-shadow:2px 2px #000}
+#controls{position:absolute;bottom:20px;width:100%;display:flex;justify-content:space-between;padding:0 20px}
+.btn{width:80px;height:80px;background:#333;border:4px solid #555;border-radius:12px;color:#fff;font-size:24px;font-weight:bold}
+.btn:active{background:#555}
+#right{position:absolute;bottom:20px;right:20px;display:flex;gap:10px}
+#start{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);background:#222;padding:30px;border:4px solid #fff;text-align:center;color:#fff}
+#start button{margin-top:20px;padding:15px 30px;font-size:20px;background:#1DB954;border:0;color:#000;font-weight:bold;cursor:pointer}
+.hidden{display:none}
+</style>
+</head>
+<body>
+<div id="game">
+<canvas id="c"></canvas>
+<div id="ui">Livello: <span id="lv">1</span>/5 | Tempo: <span id="t">180</span>s</div>
+
+<div id="controls">
+  <div>
+    <button class="btn" id="down">↓</button>
+    <button class="btn" id="jump">↑</button>
+  </div>
+  <div id="right">
+    <button class="btn" id="back">←</button>
+    <button class="btn" id="fwd">→</button>
+  </div>
+</div>
+
+<div id="start">
+  <h1>GIRAFFA RUNNER</h1>
+  <p style="margin:15px 0">Pixel style anni 90 + 8bit</p>
+  <button onclick="startGame()">START</button>
+</div>
+</div>
+
+<script>
+const c=document.getElementById('c'),ctx=c.getContext('2d');
+c.width=800;c.height=400;
+
+let audioCtx;
+function initAudio(){if(!audioCtx)audioCtx=new (window.AudioContext||window.webkitAudioContext)()}
+function beep(freq,dur,type='square'){
+  initAudio();
+  let osc=audioCtx.createOscillator(),gain=audioCtx.createGain();
+  osc.type=type;osc.frequency.value=freq;
+  gain.gain.setValueAtTime(0.2,audioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001,audioCtx.currentTime+dur);
+  osc.connect(gain);gain.connect(audioCtx.destination);
+  osc.start();osc.stop(audioCtx.currentTime+dur);
+}
+function soundJump(){beep(600,0.1,'square');setTimeout(()=>beep(800,0.1,'square'),80)}
+function soundDeath(){beep(200,0.2,'sawtooth');setTimeout(()=>beep(150,0.3,'sawtooth'),200)}
+function soundWin(){beep(523,0.15);setTimeout(()=>beep(659,0.15),150);setTimeout(()=>beep(784,0.3),300)}
+
+let giraffa={x:100,y:280,w:40,h:60,vx:0,vy:0,jump:false,crouch:false,onGround:true};
+let world={scroll:0,speed:3,level:1,time:180,platforms:[],obstacles:[],flag:null,gameOver:false,win:false,started:false};
+let keys={fwd:false,back:false,jump:false,down:false};
+let clouds=[{x:100,y:50},{x:400,y:80},{x:650,y:40}];
+
+function genLevel(lv){
+  world.platforms=[];world.obstacles=[];
+  let pos=0;
+  // Prima piattaforma sempre lunga per far partire
+  world.platforms.push({x:0,y:340,w:200,h:60});
+  pos=200;
+
+  for(let i=0;i<150;i++){
+    if(Math.random()<0.1) pos+=60;
+    world.platforms.push({x:pos,y:340,w:50,h:60});
+    if(Math.random()<0.15+lv*0.02){
+      if(Math.random()<0.5) world.obstacles.push({x:pos+10,y:310,w:30,h:30,type:'high'});
+      else world.obstacles.push({x:pos+10,y:320,w:30,h:20,type:'low'});
+    }
+    pos+=50;
+  }
+  world.flag={x:pos+100,y:280,w:20,h:60,raised:0};
+}
+
+function drawPixel(x,y,w,h,color){
+  ctx.fillStyle=color;
+  for(let i=0;i<w;i+=4)for(let j=0;j<h;j+=4)ctx.fillRect(x+i,y+j,4,4);
+}
+
+function drawGiraffa(){
+  let h=giraffa.crouch?40:60;
+  let y=giraffa.crouch?giraffa.y+20:giraffa.y;
+  drawPixel(giraffa.x,y,40,h,'#FFD700');
+  drawPixel(giraffa.x+15,y-40,10,40,'#FFD700');
+  drawPixel(giraffa.x+10,y-50,20,10,'#FFD700');
+  drawPixel(giraffa.x+12,y-48,4,4,'#000');
+  if(!giraffa.crouch){
+    drawPixel(giraffa.x-5,y+40,10,20,'#FFD700');
+    drawPixel(giraffa.x+35,y+40,10,20,'#FFD700');
+  }
+}
+
+function update(){
+  if(!world.started||world.gameOver||world.win) return;
+
+  world.time-=1/60;
+  if(world.time<=0){world.gameOver=true;soundDeath();return;}
+  document.getElementById('t').innerText=Math.ceil(world.time);
+
+  giraffa.vx=0;
+  if(keys.fwd) giraffa.vx=world.speed;
+  if(keys.back) giraffa.vx=-world.speed;
+
+  if(keys.jump&&giraffa.onGround){giraffa.vy=-12;giraffa.onGround=false;soundJump();}
+  giraffa.crouch=keys.down&&giraffa.onGround;
+
+  giraffa.vy+=0.6;
+  giraffa.x+=giraffa.vx;
+  giraffa.y+=giraffa.vy;
+
+  let gh=giraffa.crouch?40:60;
+
+  giraffa.onGround=false;
+  for(let p of world.platforms){
+    let px=p.x-world.scroll;
+    if(giraffa.x+giraffa.w>px&&giraffa.x<px+p.w&&giraffa.y+gh>=p.y&&giraffa.y+gh<=p.y+15){
+      giraffa.y=p.y-gh;giraffa.vy=0;giraffa.onGround=true;
+    }
+  }
+
+  if(!giraffa.onGround&&giraffa.y>420){world.gameOver=true;soundDeath();}
+
+  for(let o of world.obstacles){
+    let ox=o.x-world.scroll;
+    if(giraffa.x+giraffa.w>ox&&giraffa.x<ox+o.w&&giraffa.y+gh>o.y&&giraffa.y<o.y+o.h){
+      if(o.type=='high'&&!keys.jump){world.gameOver=true;soundDeath()}
+      if(o.type=='low'&&!keys.down){world.gameOver=true;soundDeath()}
+    }
+  }
+
+  let fx=world.flag.x-world.scroll;
+  if(giraffa.x>fx&&giraffa.x<fx+world.flag.w){
+    world.flag.raised=Math.min(60,world.flag.raised+2);
+    if(world.flag.raised>=60&&!world.win){
+      world.win=true;soundWin();
+      setTimeout(nextLevel,2000);
+    }
+  }
+
+  world.scroll+=giraffa.vx;
+  clouds.forEach(cl=>cl.x-=0.3);
+}
+
+function draw(){
+  ctx.clearRect(0,0,800,400);
+  ctx.fillStyle='#87CEEB';ctx.fillRect(0,0,800,400);
+
+  clouds.forEach(cl=>{
+    drawPixel(cl.x,cl.y,60,20,'#fff');
+    drawPixel(cl.x+10,cl.y-5,40,15,'#fff');
+    if(cl.x<-80) cl.x=880;
+  });
+
+  drawPixel(0,340,800,60,'#8B4513');
+
+  world.platforms.forEach(p=>{
+    drawPixel(p.x-world.scroll,p.y,p.w,p.h,'#8B4513');
+  });
+
+  world.obstacles.forEach(o=>{
+    let color=o.type=='high'?'#FF0000':'#0000FF';
+    drawPixel(o.x-world.scroll,o.y,o.w,o.h,color);
+  });
+
+  drawPixel(world.flag.x-world.scroll,world.flag.y+60-world.flag.raised,20,world.flag.raised,'#FF0000');
+  drawPixel(world.flag.x-world.scroll,world.flag.y,20,10,'#FF0000');
+
+  drawGiraffa();
+
+  if(world.gameOver){
+    ctx.fillStyle='rgba(0,0,0,0.7)';ctx.fillRect(0,0,800,400);
+    ctx.fillStyle='#fff';ctx.font='40px Courier New';ctx.fillText('GAME OVER',250,200);
+    ctx.font='20px Courier New';ctx.fillText('Ricarica per riprovare',260,250);
+  }
+  if(world.win){
+    ctx.fillStyle='rgba(0,255,0,0.7)';ctx.fillRect(0,0,800,400);
+    ctx.fillStyle='#fff';ctx.font='30px Courier New';ctx.fillText('LIVELLO COMPLETATO!',220,200);
+  }
+}
+
+function loop(){update();draw();requestAnimationFrame(loop)}
+
+function startGame(){
+  initAudio();
+  document.getElementById('start').classList.add('hidden');
+  genLevel(world.level);
+  giraffa.y=280;giraffa.onGround=true;giraffa.vy=0;
+  world.started=true;world.gameOver=false;world.win=false;
+  loop();
+}
+
+function nextLevel(){
+  if(world.level<5){
+    world.level++;world.time=180;world.scroll=0;world.gameOver=false;world.started=false;
+    document.getElementById('lv').innerText=world.level;
+    giraffa.x=100;giraffa.y=280;
+    document.getElementById('start').classList.remove('hidden');
+    document.querySelector('#start h1').innerText='LIVELLO '+world.level;
+    document.querySelector('#start button').innerText='VAI';
+  }else{
+    setTimeout(()=>alert('HAI VINTO TUTTI I 5 LIVELLI!'),500);
+  }
+}
+
+['fwd','back','jump','down'].forEach(id=>{
+  let el=document.getElementById(id);
+  el.addEventListener('touchstart',e=>{e.preventDefault();keys[id]=true});
+  el.addEventListener('touchend',e=>{e.preventDefault();keys[id]=false});
+  el.addEventListener('mousedown',()=>keys[id]=true);
+  el.addEventListener('mouseup',()=>keys[id]=false);
+});
+</script>
+</body>
+</html>
